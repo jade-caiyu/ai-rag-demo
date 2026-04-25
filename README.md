@@ -14,6 +14,7 @@
 | 向量数据库 | Chroma |
 | LLM | 阿里云 Qwen (qwen-turbo) |
 | Embedding | sentence-transformers (all-MiniLM-L6-v2) |
+| 混合检索 | BM25 + Vector + RRF融合 |
 
 ## 项目架构
 
@@ -22,7 +23,7 @@
 ├── src/
 │   ├── config.py       # 配置文件
 │   ├── ingest.py     # 知识库构建脚本
-│   └── chat.py      # 问答交互脚本
+│   └── chat.py      # 问答交互脚本（支持混合检索）
 ├── data/             # 知识库文档（Markdown格式）
 ├── chroma_db/       # 向量数据库（本地存储）
 └── README.md
@@ -31,7 +32,7 @@
 ## 核心流程
 
 ```
-用户输入 → 向量化 → 向量检索 → 内容注入Prompt → LLM生成 → 返回回答
+用户输入 → 混合检索（向量+关键词） → RRF融合 → 内容注入Prompt → LLM生成 → 返回回答
 ```
 
 ### 1. 知识库构建
@@ -40,11 +41,11 @@
 - sentence-transformers向量化
 - Chroma向量库存储
 
-### 2. 问答流程
-- 用户问题向量化
-- 相似度检索（Top-K）
-- 召回内容 + 问题注入Prompt
-- Qwen模型生成回答
+### 2. 混合检索（核心特性）
+- **向量检索**：semantic相似度匹配
+- **关键词检索**：BM25算法匹配
+- **RRF融合**：Reciprocal Rank Fusion融合两个排名结果
+- 优势：兼顾语义理解和精确匹配
 
 ## 快速开始
 
@@ -76,7 +77,7 @@ python src/chat.py
 
 ## 可扩展方向
 
-- [ ] 混合检索（BM25 + 向量）
+- [x] 混合检索（BM25 + 向量 + RRF）
 - [ ] Cross-Encoder重排
 - [ ] 评估数据集
 - [ ] Streamlit Web界面

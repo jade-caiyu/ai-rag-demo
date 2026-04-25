@@ -14,5 +14,8 @@ chromadb>=0.4.0
 # Embedding模型
 sentence-transformers>=2.2.0
 
+# BM25混合检索
+rank-bm25>=0.2.0
+
 # 其他
 python-dotenv>=1.0.0

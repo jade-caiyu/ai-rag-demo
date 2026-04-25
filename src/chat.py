@@ -8,7 +8,6 @@ import sys
 import os
 from dotenv import load_dotenv
 
-# 先加载.env文件
 load_dotenv()
 load_dotenv("/Users/jade/job/ai-rag-demo/.env")
 
@@ -17,7 +16,9 @@ import config
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
-from langchain_classic.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+
 
 def load_vectorstore():
     """加载向量数据库"""
@@ -39,21 +40,74 @@ def load_vectorstore():
     
     return vectorstore
 
-def create_qa_chain(vectorstore):
-    """创建问答chain"""
+
+def hybrid_search(query, vectorstore, top_k=5):
+    """
+    简化版混合检索
+    1. 向量检索
+    2. 关键词匹配
+    3. RRF融合
+    """
+    # 向量检索
+    docs_vector = vectorstore.similarity_search(query, k=top_k)
+    
+    # 简单关键词匹配
+    try:
+        query_terms = query.lower().split()
+        all_docs = vectorstore.get()['documents']
+        metadatas = vectorstore.get()['metadatas']
+        
+        docs_keyword = []
+        for i, doc_text in enumerate(all_docs):
+            score = sum(1 for term in query_terms if term in doc_text.lower())
+            if score > 0:
+                docs_keyword.append((i, score, doc_text))
+        
+        docs_keyword.sort(key=lambda x: x[1], reverse=True)
+        
+        # 取top结果
+        keyword_results = []
+        for i, _, text in docs_keyword[:top_k]:
+            keyword_results.append(Document(page_content=text, metadata=metadatas[i] if i < len(metadatas) else {}))
+        
+        # RRF融合
+        return rrf_merge(docs_vector, keyword_results, top_k)
+    except:
+        return docs_vector[:top_k]
+
+
+def rrf_merge(docs_a, docs_b, k=3):
+    """RRF融合"""
+    scores = {}
+    
+    for i, doc in enumerate(docs_a):
+        key = doc.page_content[:30]
+        scores[key] = scores.get(key, 0) + 1 / (i + k)
+    
+    for i, doc in enumerate(docs_b):
+        key = doc.page_content[:30]
+        scores[key] = scores.get(key, 0) + 1 / (i + k)
+    
+    sorted_keys = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+    
+    all_docs = docs_a + docs_b
+    result = []
+    for key in sorted_keys:
+        for doc in all_docs:
+            if doc.page_content[:30] == key and doc not in result:
+                result.append(doc)
+                break
+    
+    return result[:k]
+
+
+def chat():
+    """问答"""
+    vectorstore = load_vectorstore()
+    
     print("🤖 Initializing LLM...")
-    
-    # 检查API Key
-    if not config.DASHSCOPE_API_KEY:
-        print("❌ Please set DASHSCOPE_API_KEY")
-        print("   export DASHSCOPE_API_KEY='your-key'")
-        print("\n   Get key from: https://dashscope.console.aliyun.com/")
-        sys.exit(1)
-    
-    # 阿里云DashScope配置
     os.environ["DASHSCOPE_API_KEY"] = config.DASHSCOPE_API_KEY
     
-    # 使用OpenAI兼容接口（DashScope支持）
     llm = ChatOpenAI(
         model=config.LLM_MODEL,
         temperature=0.7,
@@ -61,57 +115,46 @@ def create_qa_chain(vectorstore):
         openai_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     
-    # 创建QA chain
-    qa = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=vectorstore.as_retriever(
-            search_kwargs={"k": config.RETRIEVAL_TOP_K}
-        ),
-        return_source_documents=True
+    prompt = PromptTemplate.from_template(
+        "根据以下参考文档回答问题。\n\n参考文档：\n{context}\n\n问题：{question}\n\n回答："
     )
     
-    return qa
-
-def chat(qa):
-    """问答交互"""
+    chain = prompt | llm
+    
     print("\n" + "=" * 50)
-    print("💬 AI Engineering RAG Assistant")
+    print("💬 AI Engineering RAG")
+    print("   Hybrid Search: Vector + Keyword (RRF)")
     print("=" * 50)
     print("Type 'quit' to exit\n")
     
     while True:
         query = input("You: ").strip()
         
-        if not query:
-            continue
-        
-        if query.lower() in ['quit', 'q', 'exit']:
+        if not query or query.lower() in ['quit', 'q', 'exit']:
             print("👋 Bye!")
             break
         
         try:
-            result = qa.invoke(query)
-            print(f"\nBot: {result['result']}\n")
+            # 混合检索
+            docs = hybrid_search(query, vectorstore, config.RETRIEVAL_TOP_K)
+            context = "\n\n".join([d.page_content for d in docs])
             
-            # 显示来源
-            if result.get('source_documents'):
-                print("📖 Sources:")
-                for i, doc in enumerate(result['source_documents'], 1):
-                    print(f"   {i}. {doc.metadata.get('source', 'Unknown')}")
+            # 生成回答
+            result = chain.invoke({"question": query, "context": context})
+            # 只取内容
+            answer = result.content if hasattr(result, 'content') else str(result)
+            print(f"\nBot: {answer}\n")
+            
+            # 来源
+            print("📖 Sources:")
+            for i, doc in enumerate(docs, 1):
+                src = doc.metadata.get('source', 'Unknown')
+                print(f"   {i}. {src}")
             print()
             
         except Exception as e:
             print(f"❌ Error: {e}\n")
 
-def main():
-    # 加载向量库
-    vectorstore = load_vectorstore()
-    
-    # 创建QA chain
-    qa = create_qa_chain(vectorstore)
-    
-    # 开始聊天
-    chat(qa)
 
 if __name__ == "__main__":
-    main()
+    chat()
